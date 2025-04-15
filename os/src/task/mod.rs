@@ -39,12 +39,16 @@ pub struct TaskManager {
     inner: UPSafeCell<TaskManagerInner>,
 }
 
+// Assume that the system call's ID is from 0 to MAX_SYSCALL_ID
+const MAX_SYSCALL_ID: usize = 500;
+
 /// Inner of Task Manager
 pub struct TaskManagerInner {
     /// task list
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    system_call_nums: [isize; MAX_SYSCALL_ID],
 }
 
 lazy_static! {
@@ -65,6 +69,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    system_call_nums: [0; MAX_SYSCALL_ID],
                 })
             },
         }
@@ -134,6 +139,19 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// Increments the count of the given system call ID.
+    pub fn another_system_call(&self, system_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        inner.system_call_nums[system_id] += 1;
+    }
+
+    /// Get the count of the given system call ID.
+    pub fn get_system_call(&self, system_id: usize) -> isize {
+        let inner = self.inner.exclusive_access();
+        let num: isize = inner.system_call_nums[system_id];
+        num
     }
 }
 
