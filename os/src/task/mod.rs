@@ -21,7 +21,9 @@ use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
+
 pub use context::TaskContext;
+
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -39,17 +41,16 @@ pub struct TaskManager {
     inner: UPSafeCell<TaskManagerInner>,
 }
 
-// Assume that the system call's ID is from 0 to MAX_SYSCALL_ID
-const MAX_SYSCALL_ID: usize = 500;
-
 /// Inner of Task Manager
 pub struct TaskManagerInner {
     /// task list
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
-    system_call_nums: [isize; MAX_SYSCALL_ID],
 }
+
+/// Assume that the system call's ID is from 0 to MAX_SYSCALL_ID
+pub const MAX_SYSCALL_ID: usize = 500;
 
 lazy_static! {
     /// Global variable: TASK_MANAGER
@@ -58,6 +59,7 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            sys_call_count: [0; MAX_SYSCALL_ID],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -68,8 +70,7 @@ lazy_static! {
             inner: unsafe {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
-                    current_task: 0,
-                    system_call_nums: [0; MAX_SYSCALL_ID],
+                    current_task: 0
                 })
             },
         }
@@ -124,12 +125,14 @@ impl TaskManager {
     /// or there is no `Ready` task and we can exit with all applications completed
     fn run_next_task(&self) {
         if let Some(next) = self.find_next_task() {
+            // Task Switching
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
-            let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext; 
+
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
@@ -141,17 +144,18 @@ impl TaskManager {
         }
     }
 
-    /// Increments the count of the given system call ID.
+    /// Increments the number of system calls specified under the current application
     pub fn another_system_call(&self, system_id: usize) {
         let mut inner = self.inner.exclusive_access();
-        inner.system_call_nums[system_id] += 1;
+        let current = inner.current_task;
+        inner.tasks[current].sys_call_count[system_id] += 1;
     }
 
-    /// Get the count of the given system call ID.
+    /// Get the number of system calls specified under the current application
     pub fn get_system_call(&self, system_id: usize) -> isize {
         let inner = self.inner.exclusive_access();
-        let num: isize = inner.system_call_nums[system_id];
-        num
+        let current = inner.current_task;
+        inner.tasks[current].sys_call_count[system_id]
     }
 }
 
