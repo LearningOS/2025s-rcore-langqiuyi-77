@@ -48,6 +48,9 @@ struct TaskManagerInner {
     current_task: usize,
 }
 
+/// Assume that the system call's ID is from 0 to MAX_SYSCALL_ID
+pub const MAX_SYSCALL_ID: usize = 500;
+
 lazy_static! {
     /// a `TaskManager` global instance through lazy_static!
     pub static ref TASK_MANAGER: TaskManager = {
@@ -153,6 +156,21 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Increments the number of system calls specified under the current application
+    pub fn another_system_call(&self, system_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].sys_call_count[system_id] += 1;
+    }
+
+    /// Get the number of system calls specified under the current application
+    pub fn get_system_call(&self, system_id: usize) -> isize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].sys_call_count[system_id]
+    }   
+
 }
 
 /// Run the first task in task list.
