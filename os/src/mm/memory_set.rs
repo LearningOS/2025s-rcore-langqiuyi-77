@@ -70,6 +70,17 @@ impl MemorySet {
         }
         self.areas.push(map_area);
     }
+    /// Unmap an area
+    pub fn unmap_area(&mut self, start: VirtPageNum, end: VirtPageNum) {
+        if let Some(pos) = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start && area.vpn_range.get_end() == end
+        }) {
+            let mut area = self.areas.remove(pos);
+            area.unmap(&mut self.page_table );
+        } else {
+            panic!("[unmap_area] trying to unmap non-existent area!");
+        }
+    }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
         self.page_table.map(
@@ -261,6 +272,14 @@ impl MemorySet {
         } else {
             false
         }
+    }
+
+    /// check for duplicate mappings
+    pub fn overlap_with(&self, start: VirtPageNum, end: VirtPageNum) -> bool {
+        self.areas.iter().any(|area| {
+            let a = &area.vpn_range;
+            a.get_start() < end && start < a.get_end()
+        })
     }
 }
 /// map area structure, controls a contiguous piece of virtual memory

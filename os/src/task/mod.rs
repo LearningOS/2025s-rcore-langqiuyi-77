@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+// use crate::mm::MemorySet;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -74,6 +75,18 @@ lazy_static! {
 }
 
 impl TaskManager {
+    /// Encapsulate access to the current task and execute functions
+    pub fn with_current_task_mut<F, R>(&self, f: F) -> R
+        where
+            F: FnOnce(&mut TaskControlBlock) -> R,
+        {
+            let mut inner = self.inner.exclusive_access();
+            let current = inner.current_task; // ⭐️ 提前拿出来！
+            let task = &mut inner.tasks[current];
+            f(task)
+        }
+    
+
     /// Run the first task in task list.
     ///
     /// Generally, the first task in task list is an idle task (we call it zero process later).

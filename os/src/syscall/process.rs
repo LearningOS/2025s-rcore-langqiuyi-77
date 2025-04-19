@@ -1,7 +1,7 @@
 //! Process management syscalls
-use riscv::register::fcsr::Flags;
+// use riscv::register::fcsr::Flags;
 
-use crate::{mm::{translated_byte_buffer, PTEFlags, PageTable, VirtAddr}, task::{change_program_brk, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TASK_MANAGER}, timer::get_time_us};
+use crate::{config::PAGE_SIZE, mm::{translated_byte_buffer, MapPermission, PTEFlags, PageTable, VirtAddr}, task::{change_program_brk, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TASK_MANAGER}, timer::get_time_us};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -110,16 +110,103 @@ pub fn sys_trace(_trace_request: usize, id: usize, data: usize) -> isize {
     }
 }
 
+fn parse_prot(prot: usize) -> Option<MapPermission> {
+     // 检查是否包含无效位（高于第 2 位）
+    if prot & !0x7 != 0 || prot & 0x7 == 0 {
+        return None;
+    }
+
+    let mut perm = MapPermission::empty();
+
+    if prot & 0x1 != 0 {
+        perm |= MapPermission::R;
+    }
+    if prot & 0x2 != 0 {
+        perm |= MapPermission::W;
+    }
+    if prot & 0x4 != 0 {
+        perm |= MapPermission::X;
+    }
+
+    perm |= MapPermission::U; // mmap 默认都是用户空间映射
+
+    Some(perm)
+}
+
+fn page_align_up(len: usize) -> usize {
+    (len + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE
+}
+
 // YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
     trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+    // 错误 1: start 没有页对齐
+    if start % PAGE_SIZE != 0 {
+        return -1;
+    }
+
+    // 错误 2 + 3: 权限不合法
+    let permission = match parse_prot(prot) {
+        Some(p) => p,
+        None => return -1,
+    };
+
+    // 错误 4: len 为 0
+    if len == 0 {
+        return -1;
+    }
+
+    let len_aligned = page_align_up(len);
+    let start_vpn = VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(start + len_aligned).ceil();
+
+    let result = TASK_MANAGER.with_current_task_mut(|task_inner| {
+        let memory_set = &mut task_inner.memory_set;
+
+        // 错误 5: 重复映射
+        if memory_set.overlap_with(start_vpn, end_vpn) {
+            return -1;
+        }
+
+        // 加入当前内存映射
+        memory_set.insert_framed_area(VirtAddr::from(start), VirtAddr::from(start + len_aligned), permission);
+
+        0 // 成功
+    });
+
+    result
 }
 
 // YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+    if start % PAGE_SIZE != 0 || len == 0 {
+        return -1;
+    }
+
+    let len_aligned = page_align_up(len);
+    let start_vpn = VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(start + len_aligned).ceil();
+
+    let retult = TASK_MANAGER.with_current_task_mut(|task| {
+        let memory_set = &mut task.memory_set;
+        // 检查所有页都已被映射
+        let mut addr = start;
+        while addr < start + len {
+            let vpn = VirtAddr::from(addr).floor();
+            if PageTable::from_token(current_user_token()).translate(vpn).is_none() {
+                return -1; // 存在未映射的页
+            }
+            addr += PAGE_SIZE;
+        }
+
+        // 取消映射 + 移除区域描述（MapArea）
+        memory_set.unmap_area(start_vpn, end_vpn);
+
+        0
+    });
+    
+    retult
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {
