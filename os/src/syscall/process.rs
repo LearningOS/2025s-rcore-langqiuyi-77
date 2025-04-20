@@ -68,7 +68,14 @@ pub fn sys_trace(_trace_request: usize, id: usize, data: usize) -> isize {
         let va = VirtAddr::from(id);
         let vpn = va.floor();
         let page_table = PageTable::from_token(current_user_token());
-        let flags = page_table.translate(vpn).unwrap().flags();
+        let flags;
+        match page_table.translate(vpn) {
+            Some(pet) => {
+                flags = pet.flags();
+            } None => {
+                return -1;
+            }
+        }
 
         if !flags.contains(PTEFlags::U) {
             return -1; // 不是用户态页，用户不能访问
@@ -78,16 +85,28 @@ pub fn sys_trace(_trace_request: usize, id: usize, data: usize) -> isize {
             return -1;
         }
         
-        let ptr = id as *const u8;
-        let byte = unsafe {
-            *ptr
-        };
-        byte as isize
+        // let ptr = id as *const u8;
+        // let byte = unsafe {
+        //     *ptr // ❌不能直接解用户地址的引用
+        // };
+        let buffers = translated_byte_buffer(current_user_token(), id as *const u8, 1);
+        if buffers.is_empty() || buffers[0].is_empty() {
+            return -1;
+        }
+        let byte = buffers[0][0];
+        return byte as isize;
     } else if _trace_request == 1 {
         let va = VirtAddr::from(id);
         let vpn = va.floor();
         let page_table = PageTable::from_token(current_user_token());
-        let flags = page_table.translate(vpn).unwrap().flags();
+        let flags;
+        match page_table.translate(vpn) {
+            Some(pet) => {
+                flags = pet.flags();
+            } None => {
+                return -1;
+            }
+        }
 
         if !flags.contains(PTEFlags::U) {
             return -1; 
@@ -97,12 +116,18 @@ pub fn sys_trace(_trace_request: usize, id: usize, data: usize) -> isize {
             return -1;
         }
 
-        let ptr: *mut u8 = id as *mut u8;
-        let byte: u8 = data as u8;
-        unsafe {
-            *ptr = byte;
+        // let ptr: *mut u8 = id as *mut u8;
+        // let byte: u8 = data as u8;
+        // unsafe {
+        //     *ptr = byte;
+        // }
+
+        let mut buffers = translated_byte_buffer(current_user_token(), id as *const u8, 1);
+        if buffers.is_empty() || buffers[0].is_empty() {
+            return -1;
         }
-        0
+        buffers[0][0] = data as u8; 
+        return 0;
     } else if _trace_request == 2 {
         TASK_MANAGER.get_system_call(id)
     } else {
@@ -133,43 +158,52 @@ fn parse_prot(prot: usize) -> Option<MapPermission> {
     Some(perm)
 }
 
-fn page_align_up(len: usize) -> usize {
-    (len + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE
-}
+// fn page_align_up(len: usize) -> usize {
+//     (len + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE
+// }
 
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
+    // start 是用户传进来的虚拟地址，而你的 mmap 实现要做的，是给用户分配一段映射好的虚拟内存区域。这不是内核用的地址空间，而是 用户进程地址空间中的一部分！
+    trace!("kernel: sys_mmap");
+
+
     // 错误 1: start 没有页对齐
     if start % PAGE_SIZE != 0 {
+        trace!("sys_mmap error: page not align up");
         return -1;
     }
 
     // 错误 2 + 3: 权限不合法
     let permission = match parse_prot(prot) {
         Some(p) => p,
-        None => return -1,
+        None => {
+            trace!("sys_mmap error: permission illegal");
+            return -1;
+        }
     };
 
     // 错误 4: len 为 0
     if len == 0 {
+        trace!("sys_mmap error: len = 0");
         return -1;
     }
 
-    let len_aligned = page_align_up(len);
+    // let len_aligned = page_align_up(len);
     let start_vpn = VirtAddr::from(start).floor();
-    let end_vpn = VirtAddr::from(start + len_aligned).ceil();
+    let end_vpn = VirtAddr::from(start + len).ceil();
 
     let result = TASK_MANAGER.with_current_task_mut(|task_inner| {
         let memory_set = &mut task_inner.memory_set;
 
         // 错误 5: 重复映射
         if memory_set.overlap_with(start_vpn, end_vpn) {
+            trace!("sys_mmap error: overlapped");
             return -1;
         }
 
         // 加入当前内存映射
-        memory_set.insert_framed_area(VirtAddr::from(start), VirtAddr::from(start + len_aligned), permission);
+        memory_set.insert_framed_area(VirtAddr::from(start), VirtAddr::from(start + len), permission);
 
         0 // 成功
     });
@@ -179,34 +213,28 @@ pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
 
 // YOUR JOB: Implement munmap.
 pub fn sys_munmap(start: usize, len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
+    trace!("kernel: sys_munmap");
     if start % PAGE_SIZE != 0 || len == 0 {
         return -1;
     }
 
-    let len_aligned = page_align_up(len);
+    // let len_aligned = page_align_up(len);
     let start_vpn = VirtAddr::from(start).floor();
-    let end_vpn = VirtAddr::from(start + len_aligned).ceil();
+    let end_vpn = VirtAddr::from(start + len).ceil();
 
-    let retult = TASK_MANAGER.with_current_task_mut(|task| {
+    let result = TASK_MANAGER.with_current_task_mut(|task| {
         let memory_set = &mut task.memory_set;
-        // 检查所有页都已被映射
-        let mut addr = start;
-        while addr < start + len {
-            let vpn = VirtAddr::from(addr).floor();
-            if PageTable::from_token(current_user_token()).translate(vpn).is_none() {
-                return -1; // 存在未映射的页
-            }
-            addr += PAGE_SIZE;
+        // 确保整个区间是一个完整的 MapArea
+        if let Some(_area) = memory_set.find_map_area_containing(start_vpn, end_vpn) {
+            // 取消映射 + 移除区域描述（MapArea）
+            memory_set.unmap_area(start_vpn, end_vpn);
+        } else {
+            trace!("[munmap] no map area contains the start!");
+            return -1;
         }
-
-        // 取消映射 + 移除区域描述（MapArea）
-        memory_set.unmap_area(start_vpn, end_vpn);
-
         0
     });
-    
-    retult
+    result
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

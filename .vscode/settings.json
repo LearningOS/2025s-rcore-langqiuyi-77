@@ -8,6 +8,8 @@
     "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
     "rust-analyzer.checkOnSave.allTargets": false,
     "editor.fontSize": 16,
+    "files.autoSave": "onFocusChange",
+    "editor.fontFamily": "Fira Code",
     // "rust-analyzer.cargo.features": [
     //     "board_qemu"
     // ]

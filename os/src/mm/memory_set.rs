@@ -40,6 +40,17 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    /// Get page_table
+    pub fn page_table(&self) -> &PageTable {
+        &self.page_table
+    }
+
+    /// Get MapArea starting from start
+    pub fn find_map_area_containing(&self, start: VirtPageNum, end: VirtPageNum) -> Option<&MapArea> {
+        self.areas.iter().find(|&map_area| 
+            map_area.vpn_range.get_start() == start && map_area.vpn_range.get_end() == end)
+    }
+
     /// Create a new empty `MemorySet`.
     pub fn new_bare() -> Self {
         Self {
@@ -318,7 +329,8 @@ impl MapArea {
                 self.data_frames.insert(vpn, frame);
             }
         }
-        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        let mut pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        pte_flags |= PTEFlags::V; // 👈补上 Valid 标志
         page_table.map(vpn, ppn, pte_flags);
     }
     #[allow(unused)]
