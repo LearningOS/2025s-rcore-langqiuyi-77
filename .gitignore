@@ -19,3 +19,7 @@ pushall.sh
 ci-user/
 os/vendor/
 user/
+<<<<<<< HEAD
+=======
+.vscode/
+>>>>>>> ch4

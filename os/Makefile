@@ -30,9 +30,12 @@ BASE ?= 1
 # Disassembly
 DISASM ?= -x
 
+<<<<<<< HEAD
 # Run usertests or usershell
 TEST ?=
 
+=======
+>>>>>>> ch4
 build: env $(KERNEL_BIN)
 
 env:
