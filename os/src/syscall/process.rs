@@ -7,12 +7,11 @@ use crate::{
     config::PAGE_SIZE,
     loader::get_app_data_by_name,
     mm::{
-        translated_refmut, translated_str,
-        translated_byte_buffer, MapPermission, VirtAddr,
+        translated_byte_buffer, translated_refmut, translated_str, MapPermission, VirtAddr
     },
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
+        suspend_current_and_run_next, TaskControlBlock,
     },
     timer::get_time_us
 };
@@ -238,21 +237,44 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
+pub fn sys_spawn(path: *const u8) -> isize {
     trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_spawn",
         current_task().unwrap().pid.0
     );
-    -1
+    // &str 是 (*const u8, usize)
+    let token = current_user_token();
+    let path = &translated_str(token, path);
+    // 通过 path 获得应用 elf 文件
+    // TaskControlBlock.new(elf_data: &[u8]) Create a new process 
+    // 内部有初始话该进程地址空间中的 Trap 上下文，使得进入用户态时，可以正确跳转到应用入口点
+    // add_task(new_task) 添加到调度器
+    if let Some(elf_data) = get_app_data_by_name(path.as_str()) {
+        add_task(Arc::new(TaskControlBlock::new(elf_data)));   
+        0 
+    } else {
+        panic!("There is no path faile for spawn to run");
+    }
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    -1
+    
+    if prio <= 1 {
+        panic!("prio get {} but it should be >= 2", prio);
+    } else {
+        if let Some(tcb) = current_task() {
+            let mut inner = tcb.inner_exclusive_access();
+            inner.priority = prio as usize;
+            0
+        } else {
+            panic!("current_task() get None");
+        }
+    }
 }
 
 fn parse_prot(prot: usize) -> Option<MapPermission> {

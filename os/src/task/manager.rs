@@ -23,8 +23,23 @@ impl TaskManager {
     }
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        // 第一步：先找出最小 stride 的索引（只读 borrow）
+        let min_index = self.ready_queue
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, p)| p.inner_exclusive_access().stride)
+            .map(|(i, _)| i);
+
+        // 第二步：用可变 borrow 移除元素
+        if let Some(i) = min_index {
+            let task = self.ready_queue.remove(i).unwrap(); // ✅ 现在没冲突啦
+            task.inner_exclusive_access().update_stride(); // 更新 stride
+            Some(task)
+        } else {
+            None
+        }
     }
+
 }
 
 lazy_static! {
