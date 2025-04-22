@@ -1,17 +1,22 @@
 //! Process management syscalls
-use alloc::sync::Arc;
+use alloc::{sync::Arc, 
+    //task
+};
 
 use crate::{
+    config::PAGE_SIZE,
     loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
+    mm::{
+        translated_refmut, translated_str,
+        translated_byte_buffer, MapPermission, VirtAddr,
+    },
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next,
     },
+    timer::get_time_us
 };
 // use riscv::register::fcsr::Flags;
-
-use crate::{config::PAGE_SIZE, mm::{translated_byte_buffer, MapPermission, PTEFlags, PageTable, VirtAddr}, task::{change_program_brk, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TASK_MANAGER}, timer::get_time_us};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -108,12 +113,36 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    trace!("kernel: sys_get_time");
+    let us: usize = get_time_us();
+    let ptr = ts as *const u8;                   // Rust 的指针之间的类型转换是合法的，只要你不解引用它就没事；
+    let len = core::mem::size_of::<TimeVal>();
+
+    let buffers = translated_byte_buffer(current_user_token(), ptr, len);
+
+    let time_val = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+
+    // 转成字节数组
+    let time_val_bytes = unsafe {
+        core::slice::from_raw_parts(
+            &time_val as *const _ as *const u8,
+            core::mem::size_of::<TimeVal>(),
+        )
+    };
+
+    // 写进 buffers
+    let mut offset = 0;
+    for buf in buffers {
+        let len = buf.len().min(time_val_bytes.len() - offset);
+        buf[..len].copy_from_slice(&time_val_bytes[offset..offset + len]);
+        offset += len;
+    }
+
+    0
 }
 
 // YOUR JOB: Implement mmap.
@@ -147,8 +176,10 @@ pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
     let start_vpn = VirtAddr::from(start).floor();
     let end_vpn = VirtAddr::from(start + len).ceil();
 
-    let result = TASK_MANAGER.with_current_task_mut(|task_inner| {
-        let memory_set = &mut task_inner.memory_set;
+    if let Some(task) = current_task() {
+        let tcb = task;
+        let mut inner = tcb.inner_exclusive_access();
+        let memory_set = &mut inner.memory_set;
 
         // 错误 5: 重复映射
         if memory_set.overlap_with(start_vpn, end_vpn) {
@@ -160,9 +191,9 @@ pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
         memory_set.insert_framed_area(VirtAddr::from(start), VirtAddr::from(start + len), permission);
 
         0 // 成功
-    });
-
-    result
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Implement munmap.
@@ -176,19 +207,23 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
     let start_vpn = VirtAddr::from(start).floor();
     let end_vpn = VirtAddr::from(start + len).ceil();
 
-    let result = TASK_MANAGER.with_current_task_mut(|task| {
-        let memory_set = &mut task.memory_set;
+    if let Some(task) = current_task() {
+        let tcb = task;
+        let mut inner = tcb.inner_exclusive_access();
+        let memory_set = &mut inner.memory_set;
+
         // 确保整个区间是一个完整的 MapArea
         if let Some(_area) = memory_set.find_map_area_containing(start_vpn, end_vpn) {
             // 取消映射 + 移除区域描述（MapArea）
             memory_set.unmap_area(start_vpn, end_vpn);
+            0
         } else {
             trace!("[munmap] no map area contains the start!");
-            return -1;
+            -1
         }
-        0
-    });
-    result
+    } else {
+        -1
+    }
 }
 
 /// change data segment size
