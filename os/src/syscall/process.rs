@@ -11,7 +11,7 @@ use crate::{
     },
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next, TaskControlBlock,
+        suspend_current_and_run_next,
     },
     timer::get_time_us
 };
@@ -113,7 +113,7 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!("kernel: sys_get_time");
+    // trace!("kernel: sys_get_time");
     let us: usize = get_time_us();
     let ptr = ts as *const u8;                   // Rust 的指针之间的类型转换是合法的，只要你不解引用它就没事；
     let len = core::mem::size_of::<TimeVal>();
@@ -245,13 +245,17 @@ pub fn sys_spawn(path: *const u8) -> isize {
     // &str 是 (*const u8, usize)
     let token = current_user_token();
     let path = &translated_str(token, path);
+    let current_task = current_task().unwrap();
     // 通过 path 获得应用 elf 文件
     // TaskControlBlock.new(elf_data: &[u8]) Create a new process 
     // 内部有初始话该进程地址空间中的 Trap 上下文，使得进入用户态时，可以正确跳转到应用入口点
     // add_task(new_task) 添加到调度器
     if let Some(elf_data) = get_app_data_by_name(path.as_str()) {
-        add_task(Arc::new(TaskControlBlock::new(elf_data)));   
-        0 
+        let new_task = current_task.spawn(elf_data);
+        let new_pid = new_task.pid.0;
+        add_task(new_task);   
+        // 0  spawn 不是返回 0 而是要返回对应的 PID
+        new_pid as isize
     } else {
         panic!("There is no path faile for spawn to run");
     }
@@ -265,12 +269,14 @@ pub fn sys_set_priority(prio: isize) -> isize {
     );
     
     if prio <= 1 {
-        panic!("prio get {} but it should be >= 2", prio);
+        // panic!("prio get {} but it should be >= 2", prio);   参数错误，不用 panic，返回 -1 表示错误
+        -1  
     } else {
         if let Some(tcb) = current_task() {
             let mut inner = tcb.inner_exclusive_access();
             inner.priority = prio as usize;
-            0
+            // 0    设置成功返回 prio 而不是 0，不是返回 0 就是成功，要看方法定义
+            prio    
         } else {
             panic!("current_task() get None");
         }
