@@ -9,6 +9,7 @@
     "rust-analyzer.checkOnSave.allTargets": false,
     "terminal.integrated.fontSize": 16,
     "editor.fontSize": 16,
+    "editor.fontFamily": "Fira Code",
     // "rust-analyzer.cargo.features": [
     //     "board_qemu"
     // ]
