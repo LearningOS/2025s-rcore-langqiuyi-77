@@ -3,13 +3,10 @@
 use alloc::sync::Arc;
 
 use crate::{
-    fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
-    task::{
+    config::PAGE_SIZE, fs::{open_file, OpenFlags}, mm::{translated_byte_buffer, translated_refmut, translated_str, MapPermission, VirtAddr}, task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next,
-    },
-    timer::get_time_us
+    }, timer::get_time_us
 };
 // use riscv::register::fcsr::Flags;
 
@@ -246,8 +243,9 @@ pub fn sys_spawn(path: *const u8) -> isize {
     // TaskControlBlock.new(elf_data: &[u8]) Create a new process 
     // 内部有初始话该进程地址空间中的 Trap 上下文，使得进入用户态时，可以正确跳转到应用入口点
     // add_task(new_task) 添加到调度器
-    if let Some(elf_data) = get_app_data_by_name(path.as_str()) {
-        let new_task = current_task.spawn(elf_data);
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let all_data = app_inode.read_all();
+        let new_task = current_task.spawn(all_data.as_slice());
         let new_pid = new_task.pid.0;
         add_task(new_task);   
         // 0  spawn 不是返回 0 而是要返回对应的 PID

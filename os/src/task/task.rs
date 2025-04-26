@@ -11,6 +11,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
 
+static BIG_STRIDE: usize = 100_000;
+
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -148,8 +150,6 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
-                    heap_bottom: user_sp,
-                    program_brk: user_sp,
                     priority: 16,
                     stride: 0,
                 })
@@ -193,18 +193,12 @@ impl TaskControlBlock {
             self.kernel_stack.get_top(),
             trap_handler as usize,
         );
-        *inner.get_trap_cx() = trap_cx;
+        // *inner.get_trap_cx() = trap_cx;
         // **** release current PCB
     }
 
     /// parent process fork the child process
     pub fn fork(self: &Arc<TaskControlBlock>) -> Arc<TaskControlBlock> {
-        // ---- hold parent PCB lock
-        // **** release inner automatically
-    }
-
-    /// parent process fork the child process
-    pub fn fork(self: &Arc<Self>) -> Arc<Self> {
         // ---- access parent PCB exclusively
         let mut parent_inner = self.inner_exclusive_access();
         // copy user space(include trap context)
@@ -289,8 +283,7 @@ impl TaskControlBlock {
                     program_brk: parent_inner.program_brk,
                     priority: 16,
                     stride: 0,
-                    // TODO: 
-                    fd_table: ,
+                    fd_table: Vec::new(),           // spawn 是全新创建一个进程，文件描述符表（fd_table）应当初始化为空
                 })
             },
         });
