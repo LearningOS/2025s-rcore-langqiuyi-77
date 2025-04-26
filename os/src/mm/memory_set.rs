@@ -43,6 +43,17 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    /// Get page_table
+    pub fn page_table(&self) -> &PageTable {
+        &self.page_table
+    }
+
+    /// Get MapArea starting from start
+    pub fn find_map_area_containing(&self, start: VirtPageNum, end: VirtPageNum) -> Option<&MapArea> {
+        self.areas.iter().find(|&map_area| 
+            map_area.vpn_range.get_start() == start && map_area.vpn_range.get_end() == end)
+    }
+
     /// Create a new empty `MemorySet`.
     pub fn new_bare() -> Self {
         Self {
@@ -87,6 +98,17 @@ impl MemorySet {
             map_area.copy_data(&mut self.page_table, data);
         }
         self.areas.push(map_area);
+    }
+    /// Unmap an area
+    pub fn unmap_area(&mut self, start: VirtPageNum, end: VirtPageNum) {
+        if let Some(pos) = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start && area.vpn_range.get_end() == end
+        }) {
+            let mut area = self.areas.remove(pos);
+            area.unmap(&mut self.page_table );
+        } else {
+            panic!("[unmap_area] trying to unmap non-existent area!");
+        }
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -318,6 +340,14 @@ impl MemorySet {
             false
         }
     }
+
+    /// check for duplicate mappings
+    pub fn overlap_with(&self, start: VirtPageNum, end: VirtPageNum) -> bool {
+        self.areas.iter().any(|area| {
+            let a = &area.vpn_range;
+            a.get_start() < end && start < a.get_end()
+        })
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -363,9 +393,11 @@ impl MapArea {
                 self.data_frames.insert(vpn, frame);
             }
         }
-        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        let mut pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        pte_flags |= PTEFlags::V; // 👈补上 Valid 标志
         page_table.map(vpn, ppn, pte_flags);
     }
+    #[allow(unused)]
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         if self.map_type == MapType::Framed {
             self.data_frames.remove(&vpn);
@@ -439,6 +471,13 @@ bitflags! {
         ///Accessible in U mode
         const U = 1 << 4;
     }
+}
+
+/// Return (bottom, top) of a kernel stack in kernel space.
+pub fn kernel_stack_position(app_id: usize) -> (usize, usize) {
+    let top = TRAMPOLINE - app_id * (KERNEL_STACK_SIZE + PAGE_SIZE);
+    let bottom = top - KERNEL_STACK_SIZE;
+    (bottom, top)
 }
 
 /// remap test in kernel space
