@@ -279,11 +279,18 @@ impl TaskControlBlock {
                     parent: Some(Arc::downgrade(self)),
                     children: Vec::new(),
                     exit_code: 0,
+                    fd_table: vec![                             // Learn from new()
+                        // 0 -> stdin
+                        Some(Arc::new(Stdin)),
+                        // 1 -> stdout
+                        Some(Arc::new(Stdout)),
+                        // 2 -> stderr
+                        Some(Arc::new(Stdout)),
+                    ],
                     heap_bottom: parent_inner.heap_bottom,       // Learn from fork()
                     program_brk: parent_inner.program_brk,
                     priority: 16,
                     stride: 0,
-                    fd_table: Vec::new(),           // spawn 是全新创建一个进程，文件描述符表（fd_table）应当初始化为空
                 })
             },
         });

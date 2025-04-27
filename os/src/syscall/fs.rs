@@ -1,5 +1,7 @@
 //! File and filesystem-related syscalls
-use crate::fs::{open_file, OpenFlags, Stat};
+use core::ffi::CStr;
+
+use crate::fs::{open_file, OpenFlags, Stat, ROOT_INODE};
 use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
 use crate::task::{current_task, current_user_token};
 
@@ -76,28 +78,70 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 /// YOUR JOB: Implement fstat.
-pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
+pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
     trace!(
         "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+    if let Some(file) = &inner.fd_table[fd] {
+        unsafe {
+            *st = file.fstat();
+        }
+        0
+    } else {
+        -1
+    }
 }
 
 /// YOUR JOB: Implement linkat.
-pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
+pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
     trace!(
         "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+
+    // Error 1: 链接同名文件
+    unsafe {
+        let old_str = CStr::from_ptr(old_name as *const i8);
+        let new_str = CStr::from_ptr(new_name as *const i8);
+
+        if old_str == new_str {
+            return -1;
+        }
+    }
+
+    // Error 2: old_name file not exist
+    unsafe {
+        // 首先利用 ROOT_INODE.find_inode_id 寻找对应文件的 inode
+        // 然后调用自己写的 create_link 传递对应的 new_name 和 inode_id 将其目录项添加到根目录下使得可以索引
+        if let Some(inode) = ROOT_INODE.find(CStr::from_ptr(old_name as *const i8).to_str().unwrap()) {
+            ROOT_INODE.add_directory_entry(CStr::from_ptr(new_name as *const i8).to_str().unwrap(), inode)
+        } else {
+            return -1;
+        }
+    }
 }
 
 /// YOUR JOB: Implement unlinkat.
-pub fn sys_unlinkat(_name: *const u8) -> isize {
+pub fn sys_unlinkat(name: *const u8) -> isize {
     trace!(
         "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+
+    // 获取 &str
+    let name = unsafe { CStr::from_ptr(name as *const i8).to_str().unwrap() };
+    
+    // 查找名字对应的 inode
+    if let Some(_) = ROOT_INODE.find(name) {
+        // 删除对应的目录项，注意考虑使用 unlink 彻底删除文件的情况，此时需要回收inode以及它对应的数据块。
+        ROOT_INODE.remove_directory_entry(name)
+    } else {
+        -1  // ERROR file not exist
+    }
 }
