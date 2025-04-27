@@ -164,11 +164,12 @@ impl File for OSInode {
         if !inner.inode.is_file {
             mode = StatMode::DIR;
         } 
+        
         Stat {
             dev: 0,
             ino: inner.inode.inode_id as u64,
             mode: mode,
-            nlink: inner.inode.nlink,
+            nlink: inner.inode.get_disk_nlink(),
             pad: [0; 7],
         }
     }

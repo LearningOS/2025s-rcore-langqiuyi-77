@@ -5,6 +5,7 @@ use super::{
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use log::trace;
 use spin::{Mutex, MutexGuard};
 /// Virtual filesystem layer over easy-fs
 pub struct Inode {
@@ -14,8 +15,6 @@ pub struct Inode {
     block_device: Arc<dyn BlockDevice>,
     /// inode_id
     pub inode_id: u32,
-    /// nlink
-    pub nlink: u32,
     /// is_file
     pub is_file: bool
 }
@@ -28,7 +27,6 @@ impl Inode {
         fs: Arc<Mutex<EasyFileSystem>>,
         block_device: Arc<dyn BlockDevice>,
         inode_id: u32,
-        nlink: u32,
         is_file: bool
     ) -> Self {
         Self {
@@ -37,7 +35,6 @@ impl Inode {
             fs,
             block_device,
             inode_id,
-            nlink,
             is_file
         }
     }
@@ -82,7 +79,6 @@ impl Inode {
                     self.fs.clone(),
                     self.block_device.clone(),
                     inode_id,
-                    disk_inode.nlink,
                     disk_inode.is_file()
                 ))
             })
@@ -122,47 +118,56 @@ impl Inode {
         });
     }
 
-    /// 删除文件目录项
-    pub fn remove_directory_entry(&self, name: &str) -> isize {
+    /// Get disk nlink
+    pub fn get_disk_nlink(& self) -> u32 {
         let _fs = self.fs.lock();
-        if let Some(inode) = self.find(name) {
-            // 遍历目录项首先找到对应目录项的 offset 地址, 并且计算 nlink
-            let offset = self.read_disk_inode(|root_inode| {
-                let file_count = (root_inode.size as usize) / DIRENT_SZ;        // learn from ls()
-                for i in 0..file_count {
-                    let mut dirent = DirEntry::empty();
-                    assert_eq!(
-                        root_inode.read_at(
-                            i * DIRENT_SZ,
-                            dirent.as_bytes_mut(),
-                            &self.block_device
-                        ),
-                        DIRENT_SZ,
-                    );
-                    if dirent.name() == name {
-                        return i * DIRENT_SZ;
-                    }
-                }
-                panic!("No dirent for {}", name);
-            });
-            // 是否需要回收 inode 并清空对应数据块内容
-            if inode.nlink == 1 {
-                inode.clear();
-            }
-            inode.remove_disk_nlink();
-            // 调用 modify_disk_inode 传入对应的 offset 和 DirEntry::empty() 覆盖实现
-            // TODO: 覆盖实现会对后面的读目录项有影响吗？
-            self.modify_disk_inode(|root_inode| {
-                root_inode.write_at(
-                    offset,
-                    DirEntry::empty().as_bytes(),
-                    &self.block_device
+        self.read_disk_inode(|desk_inode| {
+            desk_inode.nlink
+        })
+    }
+
+    /// 删除文件目录项
+    pub fn remove_directory_entry(&self, name: &str, inode: Arc<Inode>) -> isize {
+        let fs = self.fs.lock();
+        // 遍历目录项首先找到对应目录项的 offset 地址, 并且计算 nlink
+        let offset = self.read_disk_inode(|root_inode| {
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;        // learn from ls()
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    root_inode.read_at(
+                        i * DIRENT_SZ,
+                        dirent.as_bytes_mut(),
+                        &self.block_device
+                    ),
+                    DIRENT_SZ,
                 );
-            });
-            0
-        } else {
-            return -1;
+                if dirent.name() == name {
+                    return i * DIRENT_SZ;
+                }
+            }
+            panic!("No dirent for {}", name);
+        });
+        
+        inode.remove_disk_nlink();
+        // 调用 modify_disk_inode 传入对应的 offset 和 DirEntry::empty() 覆盖实现
+        // TODO: 覆盖实现会对后面的读目录项有影响吗？
+        self.modify_disk_inode(|root_inode| {
+            root_inode.write_at(
+                offset,
+                DirEntry::empty().as_bytes(),
+                &self.block_device
+            );
+        });
+        // 是否需要回收 inode 并清空对应数据块内容
+        if inode.read_disk_inode(|desk_inode| {
+            desk_inode.nlink == 0
+        }) {
+            // clear 内部会 lock
+            drop(fs);
+            inode.clear();
         }
+        0
     }
 
     /// Increase the size of a disk inode
@@ -228,7 +233,6 @@ impl Inode {
             self.fs.clone(),
             self.block_device.clone(),
             new_inode_id,
-            1,
             true
         )))
         // release efs lock automatically by compiler
