@@ -15,6 +15,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
 
+const MAX_THREADS: usize = 50;
+const MAX_RESOURCES: usize = 50;
+
 /// Process Control Block
 pub struct ProcessControlBlock {
     /// immutable
@@ -49,6 +52,23 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+
+    /// deadlock_detact
+    pub enable_deadlock_detect: bool,
+
+    /// mutex available
+    pub mutex_available: [usize; MAX_RESOURCES],
+    /// mutex allocation
+    pub mutex_allocation: [[usize; MAX_RESOURCES]; MAX_THREADS],
+    /// mutex_need
+    pub mutex_need: [[usize; MAX_RESOURCES]; MAX_THREADS],
+
+    /// semaphore available
+    pub semaphore_available: [usize; MAX_RESOURCES],
+    /// semaphore allocation
+    pub semaphore_allocation: [[usize; MAX_RESOURCES]; MAX_THREADS],
+    /// semaphore
+    pub semaphore_need: [[usize; MAX_RESOURCES]; MAX_THREADS],
 }
 
 impl ProcessControlBlockInner {
@@ -81,6 +101,116 @@ impl ProcessControlBlockInner {
     /// get a task with tid in this process
     pub fn get_task(&self, tid: usize) -> Arc<TaskControlBlock> {
         self.tasks[tid].as_ref().unwrap().clone()
+    }
+
+    /// detect deadlock
+    pub fn detect_mutex_deadlock(&mut self, mutex_id: usize, tid: usize) -> bool {
+        // 首先设定好 need
+        self.mutex_need[tid][mutex_id] = 1;
+
+        let mut work = self.mutex_available; // Work[j] = Available[j]
+        let mut finish = [false; MAX_THREADS];
+        let thread_num = self.tasks.len();
+        let resource_num = self.mutex_list.len();
+
+        loop {
+            let mut found = false;
+
+            // 遍历所有线程，尝试找出可以“执行完成”的线程
+            for i in 0..thread_num {
+                if finish[i] {
+                    continue;
+                }
+
+                // 检查 Need[i][j] <= Work[j] 是否成立
+                let mut can_finish = true;
+                for j in 0..resource_num {
+                    if self.mutex_need[i][j] > work[j] {
+                        can_finish = false;
+                        break;
+                    }
+                }
+
+                if can_finish {
+                    // 模拟该线程执行完成，释放资源
+                    for j in 0..resource_num {
+                        work[j] += self.mutex_allocation[i][j];
+                    }
+                    finish[i] = true;
+                    found = true;
+                }
+            }
+
+            // 如果没有找到可以执行的线程，则退出循环
+            if !found {
+                break;
+            }
+        }
+
+        // 如果还有未完成的线程，则系统不安全（有死锁）
+        for i in 0..thread_num {
+            if !finish[i] {
+                return true; // 有死锁
+            }
+        }
+
+        // 安全状态下，将 need 返回为原来的状态
+        self.mutex_need[tid][mutex_id] = 0;
+        false // 安全状态
+    }
+
+    /// detect sem deadlock
+    pub fn detect_sem_deadlock(&mut self, sem_id: usize, tid: usize) -> bool {
+        // 首先设定好 need
+        self.semaphore_need[tid][sem_id] += 1;
+
+        let mut work = self.semaphore_available; // Work[j] = Available[j]
+        let mut finish = [false; MAX_THREADS];
+        let thread_num = self.tasks.len();
+        let resource_num = self.semaphore_list.len();
+
+        loop {
+            let mut found = false;
+
+            // 遍历所有线程，尝试找出可以“执行完成”的线程
+            for i in 0..thread_num {
+                if finish[i] {
+                    continue;
+                }
+
+                // 检查 Need[i][j] <= Work[j] 是否成立
+                let mut can_finish = true;
+                for j in 0..resource_num {
+                    if self.semaphore_need[i][j] > work[j] {
+                        can_finish = false;
+                        break;
+                    }
+                }
+
+                if can_finish {
+                    // 模拟该线程执行完成，释放资源
+                    for j in 0..resource_num {
+                        work[j] += self.semaphore_allocation[i][j];
+                    }
+                    finish[i] = true;
+                    found = true;
+                }
+            }
+
+            // 如果没有找到可以执行的线程，则退出循环
+            if !found {
+                break;
+            }
+        }
+
+        // 如果还有未完成的线程，则系统不安全（有死锁）
+        for i in 0..thread_num {
+            if !finish[i] {
+                return true; // 有死锁
+            }
+        }
+
+        false // 安全状态
     }
 }
 
@@ -119,6 +249,16 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+
+                    enable_deadlock_detect: false,
+
+                    mutex_available: [0; MAX_RESOURCES],
+                    mutex_allocation: [[0; MAX_RESOURCES]; MAX_THREADS],
+                    mutex_need: [[0; MAX_RESOURCES]; MAX_THREADS],
+
+                    semaphore_available: [0; MAX_RESOURCES],
+                    semaphore_allocation: [[0; MAX_RESOURCES]; MAX_THREADS],
+                    semaphore_need: [[0; MAX_RESOURCES]; MAX_THREADS],
                 })
             },
         });
@@ -245,6 +385,16 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+
+                    enable_deadlock_detect: false,
+
+                    mutex_available: [0; MAX_RESOURCES],
+                    mutex_allocation: [[0; MAX_RESOURCES]; MAX_THREADS],
+                    mutex_need: [[0; MAX_RESOURCES]; MAX_THREADS],
+
+                    semaphore_available: [0; MAX_RESOURCES],
+                    semaphore_allocation: [[0; MAX_RESOURCES]; MAX_THREADS],
+                    semaphore_need: [[0; MAX_RESOURCES]; MAX_THREADS],
                 })
             },
         });
